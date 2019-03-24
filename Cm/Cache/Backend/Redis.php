@@ -244,16 +244,37 @@ class Cm_Cache_Backend_Redis extends Zend_Cache_Backend implements Zend_Cache_Ba
             // Support loading from a replication slave
             if (isset($options['load_from_slave'])) {
                 if (is_array($options['load_from_slave'])) {
-                    $server = $options['load_from_slave']['server'];
-                    $port = $options['load_from_slave']['port'];
-
-                    $clientOptions = $this->getClientOptions($options['load_from_slave'] + $options);
-                } else {
+                    if (isset($options['load_from_slave']['server'])) {  // Single slave
+                        $server = $options['load_from_slave']['server'];
+                        $port = $options['load_from_slave']['port'];
+                        $clientOptions = $this->getClientOptions($options['load_from_slave'] + $options);
+                        $totalServers = 2;
+                    } else {  // Multiple slaves
+                        $slaveKey = array_rand($options['load_from_slave'], 1);
+                        $slave = $options['load_from_slave'][$slaveKey];
+                        $server = $slave['server'];
+                        $port = $slave['port'];
+                        $clientOptions = $this->getClientOptions($slave + $options);
+                        $totalServers = count($options['load_from_slave']) + 1;
+                    }
+                } else {  // String
                     $server = $options['load_from_slave'];
                     $port = 6379;
                     $clientOptions = $this->_clientOptions;
+                    // If multiple addresses are given, split and choose a random one
+                    if (strpos($server, ',') !== FALSE) {
+                        $slaves = preg_split('/\s*,\s*/', $server, -1, PREG_SPLIT_NO_EMPTY);
+                        $slaveKey = array_rand($slaves, 1);
+                        $server = $slaves[$slaveKey];
+                        $port = NULL;
+                        $totalServers = count($slaves) + 1;
+                    } else {
+                        $totalServers = 2;
+                    }
                 }
-                if (is_string($server)) {
+                // Skip setting up slave if master is not write only and it is randomly chosen to be the read server
+                $masterWriteOnly = isset($options['master_write_only']) ? (int) $options['master_write_only'] : FALSE;
+                if (is_string($server) && $server && ! (!$masterWriteOnly && rand(1,$totalServers) === 1)) {
                     try {
                         $slave = new Credis_Client($server, $port, $clientOptions->timeout, $clientOptions->persistent);
                         $this->_applyClientOptions($slave, TRUE, $clientOptions);
